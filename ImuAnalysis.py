@@ -33,17 +33,6 @@ def read_data_oiseau(datasheet):
     return gait_data
 
 
-def acc_rot(quat: np.ndarray, acc: np.ndarray):
-    n = quat.shape[0]
-    new_acc = np.empty((n, 3))
-    for i in range(0, n):
-        r = R.from_quat(quat[i, :])  # x y z w
-        rot_mat = r.as_matrix()
-        new_acc[i, :] = rot_mat @ acc[i, :]
-        # new_acc[i, :] = acc[i, :] @ rot_mat
-    return new_acc * 9.8
-
-
 def acc_rot_euler(euler: np.ndarray, acc: np.ndarray):
     """用欧拉角将加速度转化为世界坐标系（经纬地坐标系）"""
     n = euler.shape[0]
@@ -616,10 +605,13 @@ def gait_param(acc, gyro_xyz, t, euler):
             # y_Ang[s_idx, 2] = (theta_y-ty_offset)[idx_to_hs[i, 0]-start_point]
             y_Ang[s_idx, 3] = (theta_y - ty_offset)[idx_to_hs[i, 2] - start_point]
             stride[s_idx] = (s_len_x[-1] ** 2 + s_len_y[-1] ** 2) ** 0.5
-            if i == 0:
-                speed[s_idx] = stride[s_idx] / (t[end_point] - t[start_point])
-            else:
+            # if i == 0:
+            #     speed[s_idx] = stride[s_idx] / (t[end_point] - t[start_point])
+            # else:
+            if i and t[idx_to_hs[i, 2]] - t[idx_to_hs[i-1, 2]] < 1.5 * period:
                 speed[s_idx] = stride[s_idx] / (t[idx_to_hs[i, 2]] - t[idx_to_hs[i - 1, 2]])
+            else:
+                speed[s_idx] = stride[s_idx] / (t[end_point] - t[start_point])
             # clearance[s_idx] = np.max(s_z-z_offset_s + 0.05*(1-np.cos((theta_y-ty_offset)*np.pi/180))[:-1])
             stride_chara[s_idx, 0] = t[to_point]
             stride_chara[s_idx, 1] = abs(turning_ang[-1] - turning_ang[0]) < 20
@@ -631,9 +623,6 @@ def gait_param(acc, gyro_xyz, t, euler):
             phase_time[p_idx, 0] = t[idx_to_hs[i + 1, 2]] - t[idx_to_hs[i, 2]]  # hs->hs 这样实际上计算的是下一步的时间参数
             phase_time[p_idx, 1] = t[idx_to_hs[i + 1, 0]] - t[idx_to_hs[i, 2]]  # stance
             phase_time[p_idx, 2] = t[idx_to_hs[i + 1, 2]] - t[idx_to_hs[i + 1, 0]]  # swing
-            phase_time2[p_idx, 0] = t[idx_to_hs[i + 1, 1]] - t[idx_to_hs[i, 1]]  # hs->hs 这样实际上计算的是下一步的时间参数
-            phase_time2[p_idx, 1] = t[idx_to_hs[i + 1, 0]] - t[idx_to_hs[i, 1]]  # stance
-            phase_time2[p_idx, 2] = t[idx_to_hs[i + 1, 1]] - t[idx_to_hs[i + 1, 0]]  # swing
             p_idx = p_idx + 1
     # plt.show()  # plt.show()导致每一步显示一次图像
     # plt.close(fig)
@@ -649,7 +638,7 @@ def gait_param(acc, gyro_xyz, t, euler):
     spt_ratio = phase_time[:, 1] / phase_time[:, 0]
 
     return stride, speed, cycle_time, spt_ratio, phase_time, clearance, idx_to_hs / freq(), \
-        period, y_Ang, stride_chara, phase_time2
+        period, y_Ang, stride_chara
 
 
 def si_param(param_l, param_r):
@@ -772,6 +761,8 @@ def imu_analysis(csvPath):
         return
 
     file = file_l + file_r
+    lor = ['left', 'right']
+
     to_hs = []
     period = []
     stride = []
@@ -779,6 +770,7 @@ def imu_analysis(csvPath):
     duration = []
     initResultFile(name_l+' '+time_l)
     for i in range(0, len(file)):
+        printArrResult('\n'+'-'*22+lor[i]+'-'*22+'\n', )
         datasheet = file[i]
         gait_data = read_data_oiseau(datasheet)
         euler = gait_data.get('euler')
@@ -795,7 +787,7 @@ def imu_analysis(csvPath):
         stride_length = gait_result[0]
         stride.append(stride_length)
         printArrResult('stride length', stride_length)
-
+        printArrResult('')
         stride_chara = gait_result[9]
         stride.append(stride_chara)
 
