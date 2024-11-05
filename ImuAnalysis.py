@@ -37,6 +37,7 @@ def acc_rot_euler(euler: np.ndarray, acc: np.ndarray):
     """用欧拉角将加速度转化为世界坐标系（经纬地坐标系）"""
     n = euler.shape[0]
     new_acc = np.empty((n, 3))
+    
     for i in range(0, n):
         r = R.from_euler('xyz', euler[i, :], degrees=True)
         rot_mat = r.as_matrix()
@@ -162,8 +163,8 @@ def find_to_hs(gyro: np.ndarray, t, period):
         to_locs[-1] = 0
 
     pk_sw = pk_sw[flag_first:]
-    to_locs = to_locs[flag_first:]
-    hs_locs = hs_locs[flag_first:]
+    to_locs = to_locs[flag_first:9]
+    hs_locs = hs_locs[flag_first:9]
     to_locs = to_locs[to_locs > 0]
     hs_locs = hs_locs[hs_locs > 0]
 
@@ -204,8 +205,8 @@ def find_to_hs(gyro: np.ndarray, t, period):
 
 def rampp_offset(acc: np.ndarray):
     n = acc.shape[0]
-    kn = max(int(0.04 * n), 1)
-    ln = max(int(0.02 * n), 1)
+    kn = max(int(0.05 * n), 1)
+    ln = max(int(0.05 * n), 1)
 
     y0 = np.mean(acc[0:kn])
     y1 = np.mean(acc[n - ln:])
@@ -268,13 +269,57 @@ def rampp_offset_sig(vel: np.ndarray):
         end_point = idx_end_ddv
 
     sigmoid = np.linspace(-15, 10, end_point - start_point)
-    offset_sig = (vel[end_point - 1] - vel[start_point]) / (1 + np.exp(-sigmoid)) + vel[start_point]
+    offset_sig_val = (vel[end_point - 1] - vel[start_point]) / (1 + np.exp(-sigmoid)) + vel[start_point]
 
     offset_1 = np.linspace(0, vel[start_point - 1], start_point)
     offset_2 = np.linspace(vel[start_point], vel[end_point - 1], end_point - start_point)
     offset_3 = np.linspace(vel[end_point], vel[-1], n - end_point)
-    offset = np.concatenate((offset_1, offset_sig, offset_3))
+    offset = np.concatenate((offset_1, offset_sig_val, offset_3))
     return offset
+
+
+def offset_sig(vec: np.ndarray):
+    n = vec.shape[0]
+    window_size = 5
+    start_point = 0
+    start_vec = vec[:window_size]
+    start_val = np.mean(start_vec)
+    end_point = n
+    end_vec = vec[n - 1 - window_size:]
+    end_val = np.mean(end_vec)
+    sigmoid = np.linspace(-1, 1, end_point - start_point)
+    offset = (end_val - start_val) / (1 + np.exp(-sigmoid)) + start_val
+
+    return offset
+
+
+def y_offset_sig(acc: np.ndarray):
+    n = acc.shape[0]
+
+    mid = int(n/2)
+    da = np.diff(acc)
+    dda = np.diff(da)
+    sig = (0.01-0.005)
+    threshold = max(0.003, 0.001 + 0.01*(dda.max() - dda.min()))
+    # threshold = 0.014
+    print(threshold, dda.max() - dda.min(), n)
+    start_point = 0
+    end_point = n
+    window_size = 10
+    for i in range(mid, n-window_size-2):
+        if np.all(dda[i:i+window_size] < threshold) and np.all(dda[i:i+window_size] > -threshold):
+            end_point = i
+            break
+
+    for i in range(mid, window_size, -1):
+        if np.all(dda[i-window_size:i] < threshold) and np.all(dda[i-window_size:i] > -threshold):
+            start_point = i
+            break
+
+    sigmoid = np.linspace(-10, 10, end_point - start_point)
+    offset = (acc[end_point - 1] - acc[start_point]) / (1 + np.exp(-sigmoid)) + acc[start_point]
+
+    return np.concatenate((acc[:start_point], offset, acc[end_point:]))
 
 
 def rampp_offset_s(s: np.ndarray):
@@ -320,6 +365,23 @@ def find_ms_acc(acc_x: np.ndarray, acc_y: np.ndarray):
     return idx
 
 
+def find_ms_dacc(acc_x: np.ndarray, acc_y: np.ndarray):
+    n_win = max(int(0.15*acc_x.shape[0]), 15)
+    n = acc_x.shape[0] - 1
+    acc = np.concatenate((np.diff(acc_x), np.diff(acc_y)), axis=0)
+    acc = acc.reshape((2, -1))
+    if n_win > n:
+        idx = int(n / 2)
+    else:
+        energy = np.zeros(n - n_win + 1)
+        for i in range(0, n - n_win + 1):
+            acc_i = acc[:, i:i + n_win] - np.mean(acc[:, i:i + n_win], axis=1).reshape(2, 1)
+            energy[i] = np.linalg.norm(acc_i)
+        idx = np.argmin(energy) + int(n_win / 2)
+
+    return idx
+
+
 def find_ms_aw(acc_x: np.ndarray, acc_y: np.ndarray, gyro: np.ndarray):
     n_win = 15
     n = acc_x.shape[0]
@@ -339,69 +401,9 @@ def find_ms_aw(acc_x: np.ndarray, acc_y: np.ndarray, gyro: np.ndarray):
     return idx
 
 
-# 利用3维加速度数据寻找ms
-# def find_ms_acc_3d(acc_x: np.ndarray, acc_y: np.ndarray, acc_z: np.ndarray):
-#     n_win = 15
-#     n = acc_x.shape[0]
-#     acc_x = acc_x - acc_x.mean()
-#     acc_y = acc_y - acc_y.mean()
-#     acc_z = acc_z - acc_z.mean()
-#     # acc = np.concatenate((acc_x, acc_y), axis=0)
-#     # acc_norm = np.linalg.norm(acc, axis=0)
-#     if n_win > n:
-#         idx = int(n / 2)
-#     else:
-#         energy = np.zeros(n - n_win + 1)
-#         for i in range(0, n - n_win + 1):
-#             energy[i] = (np.linalg.norm(acc_x[i:i + n_win]) ** 2 + np.linalg.norm(acc_y[i:i + n_win]) ** 2 +
-#                          np.linalg.norm(acc_z[i:i + n_win]) ** 2) ** 0.5
-#         idx = np.argmin(energy) + int(n_win / 2)
-#     return idx
-
-
 def idx_weight(weight, idx_for_g, idx_for_a):
     idx_for = int(weight * idx_for_g + (1 - weight) * idx_for_a)
     return idx_for
-
-
-# 应对euler不连续问题，函数没写好，也没有用上
-# def euler_reset(euler: np.ndarray, ang=300):
-#     euler = euler.reshape(-1,)
-#     euler_diff = np.diff(euler)
-#     down_flag = np.where(euler_diff < -ang)[0]
-#     up_flag = np.where(euler_diff > ang)[0]
-#     flag = np.concatenate((down_flag, up_flag))
-#     n_down = down_flag.shape[0]
-#     n_up = up_flag.shape[0]
-#     idx = np.argsort(flag)
-#     flag_sorted = np.sort(flag)
-#     flag_sort = idx < n_down
-#     i = 0
-#     if ang > 200:
-#         ran = 360
-#     else:
-#         ran = 180
-#     while i < n_down+n_up:
-#         if i < n_down+n_up-1:
-#             if flag_sort[i] != flag_sort[i+1]:
-#                 if flag_sort[i]:
-#                     euler[flag_sorted[i]+1:flag_sorted[i+1]+1] = euler[flag_sorted[i]+1:flag_sorted[i+1]+1] + 360
-#                 else:
-#                     euler[flag_sorted[i]+1:flag_sorted[i+1]+1] = euler[flag_sorted[i]+1:flag_sorted[i+1]+1] - 360
-#                 i = i + 2
-#             else:
-#                 if flag_sort[i]:
-#                     euler[flag_sorted[i]+1:] = euler[flag_sorted[i]+1:] + ran
-#                 else:
-#                     euler[flag_sorted[i]+1:] = euler[flag_sorted[i]+1:] - ran
-#                 i = i + 1
-#         else:
-#             if flag_sort[i]:
-#                 euler[flag_sorted[i]+1:] = euler[flag_sorted[i]+1:] + ran
-#             else:
-#                 euler[flag_sorted[i]+1:] = euler[flag_sorted[i]+1:] - ran
-#             i = i + 1
-#     return euler
 
 
 def gait_param(acc, gyro_xyz, t, euler):
@@ -410,6 +412,7 @@ def gait_param(acc, gyro_xyz, t, euler):
         phase_time, clearance, idx_to_hs/freq(),
         period, y_Ang
     """
+    print("aa\n")
     acc_x = acc[:, 0]
     acc_y = acc[:, 1]
     acc_z = acc[:, 2]
@@ -463,13 +466,9 @@ def gait_param(acc, gyro_xyz, t, euler):
     ax_y.grid(which='both', axis='both')
     ax_y.set_title('Y')
     ax_y.minorticks_on()
-    # ax_z.plot(t, z_filtered)
-    # ax_z.grid(which='both', axis='both')
-    # ax_z.set_title('Z')
-    # ax_z.minorticks_on()
 
-    end_point_1 = -1
-    end_point_2 = -1
+    end_point = -1
+
     for i in range(0, n_idx):
         if i == 0:
             start_point_tmp = 0
@@ -480,125 +479,82 @@ def gait_param(acc, gyro_xyz, t, euler):
             end_point_tmp = gyro.shape[0] - 1
         else:
             end_point_tmp = idx_to_hs[i + 1, 0]
-            next_to = idx_to_hs[i + 1, 0]
 
         to_point = idx_to_hs[i, 0]
         hs_point = idx_to_hs[i, 1]
         if i == 0 or hs_point - start_point_tmp > 1.5 * period * freq():
-            period_tmp = period
+            period_tmp = period * freq()
             if hs_point - to_point > 0.5 * period:
-                period_tmp = 2 * (hs_point - to_point) / freq()
-            back_offset = int(0.8 * period_tmp * freq())  # 0.8 1.2
+                period_tmp = 2 * (hs_point - to_point)
+            back_offset = int(1 * period_tmp)  # 0.8 1.2
             idx_back_g = find_ms(gyro_norm_filtered[hs_point - back_offset:hs_point])
-            idx_back_a = find_ms_acc(x_filtered[hs_point - back_offset:hs_point],
-                                     y_filtered[hs_point - back_offset:hs_point])
+            idx_back_a = find_ms_dacc(x_filtered[hs_point - back_offset:hs_point],
+                                      y_filtered[hs_point - back_offset:hs_point])
 
-            idx_back_3 = find_ms_aw(x_filtered[hs_point - back_offset:hs_point],
-                                    y_filtered[hs_point - back_offset:hs_point],
-                                    gyro_norm_filtered[hs_point - back_offset:hs_point])
-            idx_back_1 = idx_weight(1, idx_back_g, idx_back_a)
+            idx_back_1 = idx_weight(0, idx_back_g, idx_back_a)
             # idx_back_1 = idx_back_3
-            # idx_back_a = idx_back_g
             start_point_1 = idx_back_1 + hs_point - back_offset
-            idx_back_2 = idx_weight(0.85, idx_back_g, idx_back_a)
-            # idx_back_2 = idx_back_1
+            idx_back_2 = idx_weight(0, idx_back_g, idx_back_a)
             start_point_2 = idx_back_2 + hs_point - back_offset
             if np.std(x_filtered[start_point_2 - 10:start_point_2 + 10]) > 0.4 \
                     or np.std(y_filtered[start_point_2 - 10:start_point_2 + 10]) > 0.4:
-                idx_back_2 = idx_weight(0.5, idx_back_g, idx_back_a)
-                start_point_2 = idx_back_2 + hs_point - back_offset
+                idx_back_2 = idx_weight(0, idx_back_g, idx_back_a)
 
             ax_x.plot(t[start_point_1], x_filtered[start_point_1], 'o', color='b')
             ax_y.plot(t[start_point_1], y_filtered[start_point_1], 'o', color='b')
-            # ax_z.plot(t[start_point_1], z_filtered[start_point_1], 'o', color='b')
         else:
-            start_point_1 = end_point_1
-            start_point_2 = end_point_2  # 2
+            start_point_1 = end_point
         if end_point_tmp - to_point > 1.5 * period * freq() or i == n_idx - 1:
             end_point_tmp = to_point + int(0.9 * period * freq())  # 0.8
 
         idx_for_g = find_ms(gyro_norm_filtered[hs_point:end_point_tmp])
-        idx_for_a = find_ms_acc(x_filtered[hs_point:end_point_tmp], y_filtered[hs_point:end_point_tmp])
+        idx_for_a = find_ms_dacc(x_filtered[hs_point:end_point_tmp], y_filtered[hs_point:end_point_tmp])
         idx_for_3 = find_ms_aw(x_filtered[hs_point:end_point_tmp],
                                y_filtered[hs_point:end_point_tmp],
                                gyro_norm_filtered[hs_point:end_point_tmp])
-        # idx_for_a3d = find_ms_acc_3d(x_filtered[hs_point:end_point_tmp], y_filtered[hs_point:end_point_tmp],
-        # z_filtered[hs_point:end_point_tmp])
-        idx_for_1 = idx_weight(1, idx_for_g, idx_for_a)  # 1
-        # idx_for_a = idx_for_g
-        # idx_for_1 = idx_for_3
-        end_point_1 = idx_for_1 + hs_point
-        idx_for_2 = idx_weight(0.85, idx_for_g, idx_for_a)
-        # idx_for_2 = idx_for_1
-        end_point_2 = idx_for_2 + hs_point
-        test1 = x_filtered[start_point_1] ** 2 + y_filtered[start_point_1] ** 2
-        test2 = x_filtered[end_point_1] ** 2 + y_filtered[end_point_1] ** 2
-        test = (test1 - test2) / max(test1, test2)
-        sq_diff = (x_filtered[start_point_1] - x_filtered[end_point_1]) ** 2 + \
-                  (y_filtered[start_point_1] - y_filtered[end_point_1]) ** 2
 
-        if abs(x_filtered[end_point_1] - x_filtered[start_point_1]) > 0.45 \
-                or abs(y_filtered[end_point_1] - y_filtered[start_point_1]) > 0.45 \
-                or abs(test) > 0.95 \
-                or sq_diff > 1:
-            # or abs(variation(x_filtered[end_point_2 - 10:end_point_2 + 10])) > 2 \
-            # or abs(variation(y_filtered[end_point_2 - 10:end_point_2 + 10])) > 2:
-            if abs(variation(x_filtered[end_point_2 - 10:end_point_2 + 10])) > 10 \
-                    or abs(variation(y_filtered[end_point_2 - 10:end_point_2 + 10])) > 10:
-                # or np.std(x_filtered[end_point_2 - 10:end_point_2 + 10]) > 0.7 \
-                # or np.std(y_filtered[end_point_2 - 10:end_point_2 + 10]) > 0.7:
-                idx_for_2 = idx_weight(0.25, idx_for_g, idx_for_a)
-                end_point_2 = idx_for_2 + hs_point
-                # print(str(i) + ' end2 10')
-            elif abs(variation(x_filtered[end_point_2 - 10:end_point_2 + 10])) > 5 \
-                    or abs(variation(y_filtered[end_point_2 - 10:end_point_2 + 10])) > 5:
-                # or np.std(x_filtered[end_point_2 - 10:end_point_2 + 10]) > 0.5 \
-                # or np.std(y_filtered[end_point_2 - 10:end_point_2 + 10]) > 0.5:
-                idx_for_2 = idx_weight(0.5, idx_for_g, idx_for_a)
-                end_point_2 = idx_for_2 + hs_point
-                # print(str(i) + ' end2 5')
-            end_point = end_point_2
-            start_point = start_point_2  # point2
-            # print('!!!' + str(i))
-        else:
-            end_point = end_point_1
-            start_point = start_point_1
-
-        x_offset = rampp_offset(x_filtered[start_point:end_point])
-        y_offset = rampp_offset(x_filtered[start_point:end_point])
-        z_offset = rampp_offset(z_filtered[start_point:end_point])
-        g_offset = rampp_offset(-gyro_filtered[start_point_1:end_point_1])
-        gyro_z_offset = rampp_offset(gyro_z_world_filtered[start_point:end_point])
+        idx_for_1 = idx_weight(0, idx_for_g, idx_for_a)  # 1
+        end_point = idx_for_1 + hs_point
+        start_point = start_point_1
 
         if t[hs_point] - t[to_point] < period:
-            ax_x.plot(t[start_point:end_point], x_filtered[start_point:end_point], 'r', zorder=2)
-            # ax_x.plot(t[hs_point:end_point_tmp], x_filtered[hs_point:end_point_tmp], 'b', zorder=3)
+            print("ss")
+            # x_offset = rampp_offset(x_filtered[start_point:end_point])
+            # y_offset = rampp_offset(y_filtered[start_point:end_point])
+            x_offset = y_offset_sig(x_filtered[start_point:end_point])
+            y_offset = y_offset_sig(y_filtered[start_point:end_point])
+            z_offset = rampp_offset(z_filtered[start_point:end_point])
+            g_offset = rampp_offset(-gyro_filtered[start_point_1:end_point])
+            gyro_z_offset = rampp_offset(gyro_z_world_filtered[start_point:end_point])
+
+            ax_x.plot(t[start_point:end_point], x_filtered[start_point:end_point]-x_offset, 'r', zorder=2)
             ax_x.plot(t[end_point], x_filtered[end_point], 'o', zorder=4, markersize='5', alpha=0.5)
-            ax_y.plot(t[start_point:end_point], y_filtered[start_point:end_point], 'r', zorder=2)
-            # ax_y.plot(t[hs_point:end_point_tmp], y_filtered[hs_point:end_point_tmp], 'b', zorder=3)
+            ax_y.plot(t[start_point:end_point], y_filtered[start_point:end_point]-y_offset, 'r', zorder=2)
             ax_y.plot(t[end_point], y_filtered[end_point], 'o', zorder=4, markersize='5', alpha=0.5)
             # ax_z.plot(t[start_point:end_point], z_filtered[start_point:end_point], 'r', zorder=2)
-            # ax_z.plot(t[hs_point:end_point_tmp], z_filtered[hs_point:end_point_tmp], 'b', zorder=3)
             # ax_z.plot(t[end_point], z_filtered[end_point], 'o', zorder=4, markersize='5', alpha=0.5)
 
-            s_vel_x = integrate.cumulative_trapezoid(x_filtered[start_point:end_point] - x_offset, dx=1 / fs)
-            s_vel_y = integrate.cumulative_trapezoid(y_filtered[start_point:end_point] - y_offset, dx=1 / fs)
-            s_vel_z = integrate.cumulative_trapezoid(z_filtered[start_point:end_point] - z_offset, dx=1 / fs)
-            x_offset_v = rampp_offset_v(s_vel_x)
-            y_offset_v = rampp_offset_v(s_vel_y)
+            s_vel_x = integrate.cumulative_trapezoid(x_filtered[start_point:end_point]-x_offset,
+                                                     t[start_point:end_point], initial=0)
+            s_vel_y = integrate.cumulative_trapezoid(y_filtered[start_point:end_point]-y_offset,
+                                                     t[start_point:end_point], initial=0)
+            s_vel_z = integrate.cumulative_trapezoid(z_filtered[start_point:end_point] - z_offset,
+                                                     t[start_point:end_point], initial=0)
+            x_offset_v = offset_sig(s_vel_x)
+            y_offset_v = offset_sig(s_vel_y)
             z_offset_v = rampp_offset_v(s_vel_z)
-            s_len_x = integrate.cumulative_trapezoid(s_vel_x - x_offset_v, dx=1 / fs)
-            s_len_y = integrate.cumulative_trapezoid(s_vel_y - y_offset_v, dx=1 / fs)
-            s_len_z = integrate.cumulative_trapezoid(s_vel_z - z_offset_v, dx=1 / fs)
-            s_z = integrate.cumulative_trapezoid(s_vel_z - z_offset_v, dx=1 / fs)
-            z_offset_s = rampp_offset_s(s_z)
+            s_len_x = integrate.cumulative_trapezoid(s_vel_x - x_offset_v, t[start_point:end_point], initial=0)
+            s_len_y = integrate.cumulative_trapezoid(s_vel_y - y_offset_v, t[start_point:end_point], initial=0)
+            s_len_z = integrate.cumulative_trapezoid(s_vel_z - z_offset_v, t[start_point:end_point], initial=0)
+
             # theta = np.arctan((s_vel_y-y_offset_v)/(s_vel_x-x_offset_v))*180/np.pi
             # theta2 = euler_reset(theta, 120)
-            theta_y = integrate.cumulative_trapezoid(-gyro_filtered[start_point_1:end_point_1] - g_offset, dx=1 / fs)
+            theta_y = integrate.cumulative_trapezoid(-gyro_filtered[start_point_1:end_point] - g_offset,
+                                                     t[start_point:end_point], initial=0)
             ty_offset = rampp_offset_sig(theta_y)
 
             turning_ang = integrate.cumulative_trapezoid(gyro_z_world_filtered[start_point:end_point] - gyro_z_offset,
-                                                         dx=1 / fs)
+                                                         t[start_point:end_point], initial=0)
 
             y_Ang[s_idx, 0] = np.max(theta_y - ty_offset)
             y_Ang[s_idx, 1] = np.min(theta_y - ty_offset)
@@ -608,11 +564,10 @@ def gait_param(acc, gyro_xyz, t, euler):
             # if i == 0:
             #     speed[s_idx] = stride[s_idx] / (t[end_point] - t[start_point])
             # else:
-            if i and t[idx_to_hs[i, 2]] - t[idx_to_hs[i-1, 2]] < 1.5 * period:
+            if i and t[idx_to_hs[i, 2]] - t[idx_to_hs[i - 1, 2]] < 1.5 * period:
                 speed[s_idx] = stride[s_idx] / (t[idx_to_hs[i, 2]] - t[idx_to_hs[i - 1, 2]])
             else:
                 speed[s_idx] = stride[s_idx] / (t[end_point] - t[start_point])
-            # clearance[s_idx] = np.max(s_z-z_offset_s + 0.05*(1-np.cos((theta_y-ty_offset)*np.pi/180))[:-1])
             stride_chara[s_idx, 0] = t[to_point]
             stride_chara[s_idx, 1] = abs(turning_ang[-1] - turning_ang[0]) < 20
             s_idx = s_idx + 1
@@ -633,7 +588,6 @@ def gait_param(acc, gyro_xyz, t, euler):
     clearance = clearance.reshape(-1, )
     y_Ang = y_Ang.reshape((-1, 4))
     phase_time = phase_time[phase_time > 0].reshape((-1, 3))
-    phase_time2 = phase_time2[phase_time2 > 0].reshape((-1, 3))  # not used
     cycle_time = phase_time[:, 0]
     spt_ratio = phase_time[:, 1] / phase_time[:, 0]
 
@@ -768,9 +722,9 @@ def imu_analysis(csvPath):
     stride = []
     """stride_l, character_l, stride_r, character_r"""
     duration = []
-    initResultFile(name_l+' '+time_l)
+    initResultFile(name_l + ' ' + time_l)
     for i in range(0, len(file)):
-        printArrResult('\n'+'-'*22+lor[i]+'-'*22+'\n', )
+        printArrResult('\n' + '-' * 22 + lor[i] + '-' * 22 + '\n', )
         datasheet = file[i]
         gait_data = read_data_oiseau(datasheet)
         euler = gait_data.get('euler')
@@ -805,7 +759,7 @@ def imu_analysis(csvPath):
         printArrResult('angle', angle)
 
         printArrResult('-' * 50)
-
+    plt.show()
     ds_duration, step_time, stride_length_paired, swing_time_paired = step_param(to_hs, period, stride)
 
     cadence = 60 / step_time.mean()
@@ -827,4 +781,4 @@ def imu_analysis(csvPath):
     printArrResult('cv_sw', cv_sw)
     printArrResult('cv_sl ', cv_sl)
     printArrResult('cv_cd: ', cv_cd)
-    plt.show()
+
