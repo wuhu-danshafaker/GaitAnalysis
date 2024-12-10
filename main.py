@@ -9,7 +9,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    csvPath = args.csvPath if args.csvPath else r'C:\Users\13372\Documents\课程\csvData\罗柏清'
+    csvPath = args.csvPath if args.csvPath else r'C:\Users\13372\Documents\课程\csvData\1106'
 
     if args.todo == 'gait':
-        ImuAnalysis.imu_analysis(csvPath)
+        ImuAnalysis.imu_analysis(r'C:\Users\13372\Documents\课程\监测系统\健康医学院数据\csv\1130\孙佳伟\OMC_3')
