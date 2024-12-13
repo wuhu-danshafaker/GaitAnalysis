@@ -84,7 +84,7 @@ def find_to_hs(gyro: np.ndarray, t, period):
     gyro = gyro.reshape(-1)
 
     ang_v_max = gyro.max()
-    pk_sw, _ = signal.find_peaks(gyro, 100)  # height=0.4 * ang_v_max)  # 0.4
+    pk_sw, _ = signal.find_peaks(gyro, 80)  # height=0.4 * ang_v_max)  # 0.4
     n_sw = pk_sw.shape[0]
 
     # 去除相邻峰值  此方法没有考虑多个（两个以上）峰值扎堆的情况，但是滤波后的数据通常以两个峰为主
@@ -104,8 +104,8 @@ def find_to_hs(gyro: np.ndarray, t, period):
     # plt.plot(t[:-1], np.diff(gyro)*5)
     plt.plot(t[pk_sw], gyro[pk_sw], 'o')
 
-    to_locs = np.zeros((n_sw, )).astype(int)
-    hs_locs = np.zeros((n_sw, )).astype(int)
+    to_locs = np.zeros((n_sw,)).astype(int)
+    hs_locs = np.zeros((n_sw,)).astype(int)
     to_idx = 1
     hs_idx = 0
     to, _ = signal.find_peaks(-gyro[0:pk_sw[0]], height=0)
@@ -180,10 +180,10 @@ def find_to_hs(gyro: np.ndarray, t, period):
     # hs_locs_real = hs_locs_real[hs_locs_real > 0]
 
     delete_rows = []
-    for i in range(n_stride):
-        if (gyro[to_locs[i]] > gyro[hs_locs[i]] and gyro[to_locs[i]] > -50) \
-                or (to_locs[i] <= 0 or hs_locs_real[i] <= 0 or hs_locs[i] <= 0):
-            delete_rows.append(i)
+    # for i in range(n_stride):
+    #     if (gyro[to_locs[i]] > gyro[hs_locs[i]] and gyro[to_locs[i]] > -50) \
+    #             or (to_locs[i] <= 0 or hs_locs_real[i] <= 0 or hs_locs[i] <= 0):
+    #         delete_rows.append(i)
 
     to_locs = np.delete(to_locs, delete_rows, axis=0)
     hs_locs = np.delete(hs_locs, delete_rows, axis=0)
@@ -219,6 +219,27 @@ def rampp_offset(acc: np.ndarray):
     return offset
 
 
+def rampp_offset_n0(acc):
+    n = acc.shape[0]
+    y0 = acc[0]
+    y1 = acc[-1]
+    offset = np.linspace(y0, y1, n)
+    return offset
+
+
+def find_ddv_boundary(acc):
+    n = acc.shape[0]
+    kn = max(0, 1)
+    ln = max(0, 1)
+    da = np.diff(acc)
+    dda = np.diff(da)
+    flat_arr = np.where((dda > 0.03) | (dda < -0.03))[0]
+    if flat_arr.shape[0] > 10:
+        kn = max(flat_arr[0], kn)
+        ln = min(flat_arr[-1], ln)
+    return kn, n - ln
+
+
 def ddv_offset(acc: np.ndarray):
     # TODO: 修改两端，使得效果更佳
     n = acc.shape[0]
@@ -226,10 +247,12 @@ def ddv_offset(acc: np.ndarray):
     ln = max(int(0.05 * n), 1)
     da = np.diff(acc)
     dda = np.diff(da)
-    flat_arr = np.where((dda > 0.05) | (dda < -0.05))[0]
+    ddv_threshold = 0.05
+    meanN = max(kn, ln)
+    flat_arr = np.where((dda > ddv_threshold) | (dda < -ddv_threshold))[0]
     if flat_arr.shape[0] > 10:
-        kn = max(flat_arr[0], kn)
-        ln = min(flat_arr[-1], ln)
+        kn = min(flat_arr[0], kn)
+        ln = min(n-flat_arr[-1], ln)
 
     # acc_max = np.argmax(acc)
     # acc_min = np.argmin(acc)
@@ -237,25 +260,31 @@ def ddv_offset(acc: np.ndarray):
     # kn = neg_pks[-1]
     # pos_pks, _ = signal.find_peaks(acc[acc_min:])
     # ln = pos_pks[0]
+
+
     # y0 = np.mean(acc[0:kn])
     # y1 = np.mean(acc[n - ln:])
-    y0 = acc[kn]
-    y1 = acc[n-ln]
-    # offset1 = np.ones(kn) * y0
-    # offset3 = np.ones(ln) * y1
-    offset1 = acc[0:kn]
-    offset3 = acc[n - ln:]
-    offset2 = np.linspace(y0, y1, n - kn - ln)
-    # offset2_sig = 1/(1+np.exp(-offset2))
+    # y0 = acc[kn]
+    # y1 = acc[n - ln]
+    y0 = np.mean(acc[kn:kn+meanN])
+    y1 = np.mean(acc[n-ln-meanN:n-ln])
+    # offset11 = np.ones(meanN) * y0
+    # offset33 = np.ones(meanN) * y1
+    offset1 = acc[0:kn+meanN]
+    offset3 = acc[n-ln-meanN:]
+    offset2 = np.linspace(y0, y1, n - kn - ln-2*meanN)
+    # sigmoid = np.linspace(-10, 50, n - kn - ln-2*meanN)
+    # offset2 = (y1 - y0) / (1 + np.exp(-sigmoid)) + y0
+    # offset = np.concatenate((offset1, offset11, offset2, offset33, offset3))
     offset = np.concatenate((offset1, offset2, offset3))
     return offset
 
 
-def rampp_offset_v(vel: np.ndarray):
+def rampp_offset_v(vel: np.ndarray, n_size=5):
     n = vel.shape[0]
-    y1 = np.mean(vel[n - 5:])
-    offset1 = np.linspace(0, y1, n - 5)
-    offset2 = np.ones(5) * y1
+    y1 = np.mean(vel[n - n_size:])
+    offset1 = np.linspace(0, y1, n - n_size)
+    offset2 = np.ones(n_size) * y1
     offset = np.concatenate((offset1, offset2))
     return offset
 
@@ -320,7 +349,7 @@ def offset_sig(vec: np.ndarray):
     end_point = n
     end_vec = vec[n - 1 - window_size:]
     end_val = np.mean(end_vec)
-    sigmoid = np.linspace(-1, 1, end_point - start_point)
+    sigmoid = np.linspace(-10, 10, end_point - start_point)
     offset = (end_val - start_val) / (1 + np.exp(-sigmoid)) + start_val
 
     return offset
@@ -439,6 +468,20 @@ def idx_weight(weight, idx_for_g, idx_for_a):
     return idx_for
 
 
+def de_glitch(acc):
+    acc_med = signal.medfilt(acc, 5)
+    # da = np.diff(acc)
+    # glitch_loc = np.where((da > 10) | (da < -10))[0] + 1
+    # glitch_intervals = np.split(glitch_loc, np.where(np.diff(glitch_loc) > 3)[0] + 1)
+    # glitch_intervals = [interval for interval in glitch_intervals if len(interval) > 0]
+    # for interval in glitch_intervals:
+    #     start_point = interval[0]
+    #     end_point = interval[-1]
+    #     n_interval = end_point - start_point + 1
+    #     acc[start_point:end_point+1] = acc_med[start_point:end_point+1]
+    return acc_med
+
+
 def gait_param(acc, gyro_xyz, t, euler):
     """计算所需要的一条腿上的步态参数，可进行补充
         stride, speed, cycle_time, spt_ratio,
@@ -459,12 +502,16 @@ def gait_param(acc, gyro_xyz, t, euler):
     # 滤波
     wc = 2 * 6 / fs  # 截至频率6hz
     b, a = signal.butter(4, wc, 'low')
-    x_filtered = signal.filtfilt(b, a, acc_x)
-    y_filtered = signal.filtfilt(b, a, acc_y)
+
     z_filtered = signal.filtfilt(b, a, acc_z)
+    # x_filtered = signal.filtfilt(b, a, acc_x)
+    # y_filtered = signal.filtfilt(b, a, acc_y)
+    # x_filtered = de_glitch(acc_x)
+    # y_filtered = de_glitch(acc_y)
+    x_filtered = signal.filtfilt(b, a, de_glitch(acc_x))
+    y_filtered = signal.filtfilt(b, a, de_glitch(acc_y))
     acc_norm_filtered = signal.filtfilt(b, a, acc_norm)
     period = find_period(gyro)
-    # period = 1.4
 
     gyro_filtered = signal.filtfilt(b, a, gyro)
     gyro_norm_filtered = signal.filtfilt(b, a, gyro_norm)
@@ -525,24 +572,14 @@ def gait_param(acc, gyro_xyz, t, euler):
         if not is_dacc:
             if i == 0 or hs_point - start_point_tmp > 1.5 * period * freq():
                 period_tmp = period * freq()
-                if hs_point - to_point > 0.5 * period:
-                    period_tmp = 2 * (hs_point - to_point)
-                back_offset = int(0.9 * period_tmp)  # 0.8 1.2
+                # if hs_point - to_point > 0.5 * period:
+                #     period_tmp = 2 * (hs_point - to_point)
+                back_offset = int(0.85 * period_tmp)  # 0.8 1.2
                 idx_back_g = find_ms(gyro_norm_filtered[hs_point - back_offset:hs_point])
                 idx_back_a = find_ms_acc(x_filtered[hs_point - back_offset:hs_point],
                                          y_filtered[hs_point - back_offset:hs_point])
-
-                idx_back_3 = find_ms_aw(x_filtered[hs_point - back_offset:hs_point],
-                                        y_filtered[hs_point - back_offset:hs_point],
-                                        gyro_norm_filtered[hs_point - back_offset:hs_point])
-                idx_back_1 = idx_weight(1, idx_back_g, idx_back_a)
+                idx_back_1 = idx_weight(0.85, idx_back_g, idx_back_a)  # 1
                 start_point_1 = idx_back_1 + hs_point - back_offset
-                idx_back_2 = idx_weight(0.85, idx_back_g, idx_back_a)
-                start_point_2 = idx_back_2 + hs_point - back_offset
-                if np.std(x_filtered[start_point_2 - 10:start_point_2 + 10]) > 0.4 \
-                        or np.std(y_filtered[start_point_2 - 10:start_point_2 + 10]) > 0.4:
-                    idx_back_2 = idx_weight(0.5, idx_back_g, idx_back_a)
-                    start_point_2 = idx_back_2 + hs_point - back_offset
 
                 ax_x.plot(t[start_point_1], x_filtered[start_point_1], 'o', color='b')
                 ax_y.plot(t[start_point_1], y_filtered[start_point_1], 'o', color='b')
@@ -550,15 +587,10 @@ def gait_param(acc, gyro_xyz, t, euler):
                 start_point_1 = end_point_1
                 start_point_2 = end_point_2  # 2
             if end_point_tmp - to_point > 1.5 * period * freq() or i == n_idx - 1:
-                end_point_tmp = to_point + int(1 * period * freq())  # 0.8
+                end_point_tmp = to_point + int(0.8 * period * freq())  # 0.8
 
             idx_for_g = find_ms(gyro_norm_filtered[hs_point:end_point_tmp])
             idx_for_a = find_ms_acc(x_filtered[hs_point:end_point_tmp], y_filtered[hs_point:end_point_tmp])
-            idx_for_3 = find_ms_aw(x_filtered[hs_point:end_point_tmp],
-                                   y_filtered[hs_point:end_point_tmp],
-                                   gyro_norm_filtered[hs_point:end_point_tmp])
-            # idx_for_a3d = find_ms_acc_3d(x_filtered[hs_point:end_point_tmp], y_filtered[hs_point:end_point_tmp],
-            # z_filtered[hs_point:end_point_tmp])
             idx_for_1 = idx_weight(1, idx_for_g, idx_for_a)  # 1
             end_point_1 = idx_for_1 + hs_point
             idx_for_2 = idx_weight(0.85, idx_for_g, idx_for_a)
@@ -629,10 +661,13 @@ def gait_param(acc, gyro_xyz, t, euler):
             end_point = end_point_1
             start_point = start_point_1
         if t[hs_point] - t[to_point] < period:
-            # x_offset = offset_sig(x_filtered[start_point:end_point])
-            # y_offset = offset_sig(y_filtered[start_point:end_point])
+            # start_point, end_point = find_ddv_boundary(x_filtered[start_point:end_point]) + start_point
+            # x_offset = rampp_offset_n0(x_filtered[start_point:end_point])
+            # y_offset = rampp_offset_n0(y_filtered[start_point:end_point])
             x_offset = ddv_offset(x_filtered[start_point:end_point])
             y_offset = ddv_offset(y_filtered[start_point:end_point])
+            # x_offset = rampp_offset(x_filtered[start_point:end_point])
+            # y_offset = rampp_offset(y_filtered[start_point:end_point])
             z_offset = rampp_offset(z_filtered[start_point:end_point])
             g_offset = rampp_offset(-gyro_filtered[start_point:end_point])
             gyro_z_offset = rampp_offset(gyro_z_world_filtered[start_point:end_point])
@@ -654,6 +689,9 @@ def gait_param(acc, gyro_xyz, t, euler):
                                                      t[start_point:end_point], initial=0)
             x_offset_v = offset_sig(s_vel_x)
             y_offset_v = offset_sig(s_vel_y)
+            # y_offset_v = s_vel_y
+            # x_offset_v = rampp_offset(s_vel_x)
+            # y_offset_v = rampp_offset(s_vel_y)
             z_offset_v = rampp_offset_v(s_vel_z)
             s_len_x = integrate.cumulative_trapezoid(s_vel_x - x_offset_v, t[start_point:end_point], initial=0)
             s_len_y = integrate.cumulative_trapezoid(s_vel_y - y_offset_v, t[start_point:end_point], initial=0)
@@ -676,7 +714,7 @@ def gait_param(acc, gyro_xyz, t, euler):
             # y_Ang[s_idx, 2] = (theta_y-ty_offset)[idx_to_hs[i, 0]-start_point]
             # y_Ang[s_idx, 3] = (theta_y - ty_offset)[idx_to_hs[i, 2] - start_point]
             stride[s_idx] = (s_len_x[-1] ** 2 + s_len_y[-1] ** 2) ** 0.5
-            # stride[s_idx] = s_len_x[-1]
+            # stride[s_idx] = abs(s_len_x[-1])
             # if i == 0:
             #     speed[s_idx] = stride[s_idx] / (t[end_point] - t[start_point])
             # else:
@@ -826,9 +864,9 @@ def imu_analysis(csvPath):
 
     name_l = file_l[0].split('\\')[-1].split('_')[0]
     name_r = file_r[0].split('\\')[-1].split('_')[0]
-    if time_l != time_r or name_l != name_r:
-        print("not matched!")
-        return
+    # if time_l != time_r or name_l != name_r:
+    #     print("not matched!")
+    #     return
 
     file = file_l + file_r
     lor = ['left', 'right']
