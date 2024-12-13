@@ -247,12 +247,12 @@ def ddv_offset(acc: np.ndarray):
     ln = max(int(0.05 * n), 1)
     da = np.diff(acc)
     dda = np.diff(da)
-    ddv_threshold = 0.05
+    ddv_threshold = 0.03
     meanN = max(kn, ln)
     flat_arr = np.where((dda > ddv_threshold) | (dda < -ddv_threshold))[0]
     if flat_arr.shape[0] > 10:
-        kn = min(flat_arr[0], kn)
-        ln = min(n-flat_arr[-1], ln)
+        kn = max(flat_arr[0], 0)
+        ln = max(n-2-flat_arr[-1]-1, 0)
 
     # acc_max = np.argmax(acc)
     # acc_min = np.argmin(acc)
@@ -268,15 +268,15 @@ def ddv_offset(acc: np.ndarray):
     # y1 = acc[n - ln]
     y0 = np.mean(acc[kn:kn+meanN])
     y1 = np.mean(acc[n-ln-meanN:n-ln])
-    # offset11 = np.ones(meanN) * y0
-    # offset33 = np.ones(meanN) * y1
-    offset1 = acc[0:kn+meanN]
-    offset3 = acc[n-ln-meanN:]
+    offset11 = np.ones(meanN) * y0
+    offset33 = np.ones(meanN) * y1
+    offset1 = acc[0:kn]
+    offset3 = acc[n-ln:]
     offset2 = np.linspace(y0, y1, n - kn - ln-2*meanN)
     # sigmoid = np.linspace(-10, 50, n - kn - ln-2*meanN)
     # offset2 = (y1 - y0) / (1 + np.exp(-sigmoid)) + y0
-    # offset = np.concatenate((offset1, offset11, offset2, offset33, offset3))
-    offset = np.concatenate((offset1, offset2, offset3))
+    offset = np.concatenate((offset1, offset11, offset2, offset33, offset3))
+    # offset = np.concatenate((offset1, offset2, offset3))
     return offset
 
 
@@ -574,7 +574,7 @@ def gait_param(acc, gyro_xyz, t, euler):
                 period_tmp = period * freq()
                 # if hs_point - to_point > 0.5 * period:
                 #     period_tmp = 2 * (hs_point - to_point)
-                back_offset = int(0.85 * period_tmp)  # 0.8 1.2
+                back_offset = int(0.8 * period_tmp)  # 0.8 1.2
                 idx_back_g = find_ms(gyro_norm_filtered[hs_point - back_offset:hs_point])
                 idx_back_a = find_ms_acc(x_filtered[hs_point - back_offset:hs_point],
                                          y_filtered[hs_point - back_offset:hs_point])
